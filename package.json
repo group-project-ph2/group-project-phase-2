@@ -1,0 +1,27 @@
+{
+  "name": "group-project-phase-2",
+  "version": "1.0.0",
+  "description": "Repo ini untuk bikin server",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/group-project-ph2/group-project-phase-2.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/group-project-ph2/group-project-phase-2/issues"
+  },
+  "homepage": "https://github.com/group-project-ph2/group-project-phase-2#readme",
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
+    "express": "^5.1.0",
+    "socket.io": "^4.8.1"
+  }
+}
