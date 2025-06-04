@@ -8,12 +8,13 @@ require("dotenv").config();
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
-  cors: "*",
+  cors: "*"
 });
 
 app.use(cors());
 app.use(express.json());
 
+// Initialize Google AI
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
@@ -22,6 +23,7 @@ console.log(
   process.env.GOOGLE_API_KEY ? "Present" : "Missing"
 );
 
+// Game state
 let rooms = {};
 let waitingRoom = null;
 
@@ -191,6 +193,7 @@ class GameRoom {
   endRoundByTimeout() {
     clearInterval(this.timer);
 
+    // Cari player yang belum menebak
     const playersNotGuessed = this.players.filter(
       (p) => this.playerGuesses[p.id] === null
     );
@@ -228,6 +231,7 @@ class GameRoom {
       (id) => this.scores[id] === maxScore
     );
 
+    // Kirim notifikasi individual ke setiap player
     this.players.forEach((player) => {
       let personalResult;
 
@@ -260,7 +264,7 @@ class GameRoom {
         }
       }
 
-      
+      // Kirim hasil personal ke masing-masing player
       io.to(player.id).emit("gameEnd", {
         result: personalResult,
         finalScores: this.scores,
@@ -299,7 +303,7 @@ Angka = ${this.targetNumber}`;
       console.error("❌ Error generating AI hint:", error.message);
       console.error("Full error:", error);
 
-      
+      // Fallback hints berdasarkan angka
       const fallbackHints = {
         1: "Angka yang paling pertama, kayak ranking kamu di hati mama!",
         10: "Angka yang bikin kamu bangga kalau dapet di ulangan matematika.",
@@ -316,108 +320,109 @@ Angka = ${this.targetNumber}`;
 }
 
 io.on("connection", (socket) => {
-    console.log("User connected:", socket.id);
-  
-    socket.on("joinGame", (playerName) => {
-      const player = { id: socket.id, name: playerName };
-  
-      if (!waitingRoom || waitingRoom.players.length >= 4) {
-        const roomId = "room_" + Date.now();
-        waitingRoom = new GameRoom(roomId);
-        rooms[roomId] = waitingRoom;
+  console.log("User connected:", socket.id);
+
+  socket.on("joinGame", (playerName) => {
+    const player = { id: socket.id, name: playerName };
+
+    // Find or create waiting room
+    if (!waitingRoom || waitingRoom.players.length >= 4) {
+      const roomId = "room_" + Date.now();
+      waitingRoom = new GameRoom(roomId);
+      rooms[roomId] = waitingRoom;
+    }
+
+    if (waitingRoom.addPlayer(player)) {
+      socket.join(waitingRoom.id);
+      socket.roomId = waitingRoom.id;
+
+      const isRoomMaster = waitingRoom.players.length === 1;
+
+      socket.emit("joinedRoom", {
+        roomId: waitingRoom.id,
+        isRoomMaster,
+        players: waitingRoom.players,
+      });
+
+      socket.to(waitingRoom.id).emit("playerJoined", {
+        player,
+        players: waitingRoom.players,
+      });
+
+      // Auto start if room is full
+      if (waitingRoom.players.length === 4) {
+        waitingRoom = null; // Create new waiting room for next players
       }
-  
-      if (waitingRoom.addPlayer(player)) {
-        socket.join(waitingRoom.id);
-        socket.roomId = waitingRoom.id;
-  
-        const isRoomMaster = waitingRoom.players.length === 1;
-  
-        socket.emit("joinedRoom", {
-          roomId: waitingRoom.id,
-          isRoomMaster,
-          players: waitingRoom.players,
-        });
-  
-        socket.to(waitingRoom.id).emit("playerJoined", {
-          player,
-          players: waitingRoom.players,
-        });
-  
-        if (waitingRoom.players.length === 4) {
-          waitingRoom = null; 
-        }
-      }
-    });
-  
-    socket.on("startGame", () => {
+    }
+  });
+
+  socket.on("startGame", () => {
+    const room = rooms[socket.roomId];
+    if (room && room.players[0].id === socket.id && room.players.length >= 2) {
+      room.startGame();
+      io.to(room.id).emit("gameStarted", {
+        round: 1,
+        totalRounds: room.maxRounds,
+      });
+    }
+  });
+
+  socket.on("makeGuess", (guess) => {
+    const room = rooms[socket.roomId];
+    if (room) {
+      room.makeGuess(socket.id, parseInt(guess));
+    }
+  });
+
+  socket.on("requestHint", async () => {
+    const room = rooms[socket.roomId];
+    if (room && room.gameState === "playing") {
+      const hint = await room.getAIHint();
+      socket.emit("aiHint", hint); // Hanya kirim ke player yang meminta
+    }
+  });
+
+  socket.on("disconnect", () => {
+    console.log("User disconnected:", socket.id);
+
+    if (socket.roomId && rooms[socket.roomId]) {
       const room = rooms[socket.roomId];
-      if (room && room.players[0].id === socket.id && room.players.length >= 2) {
-        room.startGame();
-        io.to(room.id).emit("gameStarted", {
-          round: 1,
-          totalRounds: room.maxRounds,
-        });
-      }
-    });
-  
-    socket.on("makeGuess", (guess) => {
-      const room = rooms[socket.roomId];
-      if (room) {
-        room.makeGuess(socket.id, parseInt(guess));
-      }
-    });
-  
-    socket.on("requestHint", async () => {
-      const room = rooms[socket.roomId];
-      if (room && room.gameState === "playing") {
-        const hint = await room.getAIHint();
-        socket.emit("aiHint", hint); 
-      }
-    });
-  
-    socket.on("disconnect", () => {
-      console.log("User disconnected:", socket.id);
-  
-      if (socket.roomId && rooms[socket.roomId]) {
-        const room = rooms[socket.roomId];
-        const disconnectedPlayer = room.players.find((p) => p.id === socket.id);
-        const wasRoomMaster = room.players[0]?.id === socket.id; 
-  
-        room.removePlayer(socket.id);
-  
-        if (disconnectedPlayer) {
-          // Jika yang keluar adalah room master dan masih ada player lain
-          if (wasRoomMaster && room.players.length > 0) {
-            // Player pertama yang tersisa menjadi room master baru
-            const newRoomMaster = room.players[0];
-  
-            // Emit event ke semua player bahwa ada room master baru
-            io.to(room.id).emit("roomMasterChanged", {
-              newRoomMaster: newRoomMaster,
-              message: `${newRoomMaster.name} sekarang menjadi room master`,
-            });
-          }
-  
-          io.to(room.id).emit("playerLeft", {
-            player: disconnectedPlayer,
-            players: room.players,
-            wasRoomMaster: wasRoomMaster,
+      const disconnectedPlayer = room.players.find((p) => p.id === socket.id);
+      const wasRoomMaster = room.players[0]?.id === socket.id; // Cek apakah yang keluar adalah room master
+
+      room.removePlayer(socket.id);
+
+      if (disconnectedPlayer) {
+        // Jika yang keluar adalah room master dan masih ada player lain
+        if (wasRoomMaster && room.players.length > 0) {
+          // Player pertama yang tersisa menjadi room master baru
+          const newRoomMaster = room.players[0];
+
+          // Emit event ke semua player bahwa ada room master baru
+          io.to(room.id).emit("roomMasterChanged", {
+            newRoomMaster: newRoomMaster,
+            message: `${newRoomMaster.name} sekarang menjadi room master`,
           });
         }
-  
-        if (room.players.length === 0) {
-          delete rooms[socket.roomId];
-          if (waitingRoom && waitingRoom.id === socket.roomId) {
-            waitingRoom = null;
-          }
+
+        io.to(room.id).emit("playerLeft", {
+          player: disconnectedPlayer,
+          players: room.players,
+          wasRoomMaster: wasRoomMaster,
+        });
+      }
+
+      if (room.players.length === 0) {
+        delete rooms[socket.roomId];
+        if (waitingRoom && waitingRoom.id === socket.roomId) {
+          waitingRoom = null;
         }
       }
-    });
+    }
   });
-  
-  const PORT = process.env.PORT || 3001;
-  server.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-  });
-  
+});
+
+const PORT = process.env.PORT || 3001;
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
